@@ -1,0 +1,366 @@
+\documentclass[a4paper,12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[russian]{babel}
+\usepackage{amsmath}
+\usepackage{amsfonts}
+\usepackage{geometry}
+\geometry{margin=1in}
+
+\begin{document}
+
+\section*{Численное решение уравнений Навье-Стокса методом конечных объемов}
+
+\subsection*{Общие положения}
+Система уравнений Навье-Стокса для несжимаемой жидкости в цилиндрических координатах с преобразованным радиусом \(\xi = r^m\) приведена к дивергентной форме. Численное решение использует метод конечных объемов (FVM) с двухстадийным подходом:
+\begin{enumerate}
+    \item \textbf{Predictor}: вычисление промежуточной скорости \(\mathbf{u}^*\) с учетом конвективных (\(\nabla J_{\text{conv}}\)), вязких (\(\nabla J_{\text{vis}}\)) и источниковых (\(S_{\text{ист}}\)) членов.
+    \item \textbf{Corrector}: решение уравнения Пуассона для давления \(p^{n+1}\) и коррекция скорости \(\mathbf{u}^{n+1}\).
+\end{enumerate}
+
+Сетка структурированная, ортогональная в координатах \((\xi, z)\), с шагом \(\Delta \xi\) и \(\Delta z\). Контрольный объем (КО) имеет центр \(P(i,j)\) с координатами \((\xi_P, z_P)\) и грани:
+\begin{itemize}
+    \item East (\(e\)): \(\xi = \xi_P + \Delta \xi / 2\), площадь \(A_e = \frac{2\pi}{m} \xi_e^{(2/m) - 1} \Delta z\).
+    \item West (\(w\)): \(\xi = \xi_P - \Delta \xi / 2\), площадь \(A_w = \frac{2\pi}{m} \xi_w^{(2/m) - 1} \Delta z\).
+    \item North (\(n\)): \(z = z_P + \Delta z / 2\), площадь \(A_n = \frac{2\pi}{m} \xi_P^{(2/m) - 1} \Delta \xi\).
+    \item South (\(s\)): \(z = z_P - \Delta z / 2\), площадь \(A_s = \frac{2\pi}{m} \xi_P^{(2/m) - 1} \Delta \xi\).
+\end{itemize}
+
+Физический объем КО, учитывающий аксисимметрию и преобразование \(\xi = r^m\):
+\[
+V_{\text{phys}} = \frac{2\pi}{m} \xi_P^{(2/m) - 1} \Delta \xi \Delta z
+\]
+Временная дискретизация явная (первого порядка, Euler forward), шаг \(\Delta t\), текущий слой времени \(n\), следующий \(n+1\). Конвективные потоки аппроксимируются экспоненциальной схемой, вязкие — центральной разностной, источники — в центре КО.
+
+\subsection*{Граничные условия}
+\begin{itemize}
+    \item \textbf{Горизонтальные границы (\(z = 0\), \(z = z_{\text{max}}\))}:
+    \begin{itemize}
+        \item Вертикальная скорость (\(u_z\)): 
+        \[
+        u_{z,i,1} = 0 \quad (z=0), \quad u_{z,i,N_y+1} = 0 \quad (z=z_{\text{max}})
+        \]
+        \item Горизонтальная скорость (\(u_r\)) в фиктивных ячейках:
+        \[
+        u_{r,i,1} = 2 u_{\text{boundary bottom}}(\xi_i) - u_{r,i,2} \quad (z=0)
+        \]
+        \[
+        u_{r,i,N_y+2} = 2 u_{\text{boundary up}}(\xi_i) - u_{r,i,N_y} \quad (z=z_{\text{max}})
+        \]
+        \item Давление: \(\frac{\partial p}{\partial z} = 0\), т.е. \(p_{i,1} = p_{i,2}\), \(p_{i,N_y+2} = p_{i,N_y}\).
+    \end{itemize}
+    \item \textbf{Вертикальные границы (\(\xi = 0\), \(\xi = \xi_{\text{max}}\))}:
+    \begin{itemize}
+        \item Горизонтальная скорость (\(u_r\)):
+        \[
+        u_{r,1,j} = 0 \quad (\xi=0), \quad u_{r,N_x+1,j} = 0 \quad (\xi=\xi_{\text{max}})
+        \]
+        \item Вертикальная скорость (\(u_z\)) в фиктивных ячейках:
+        \[
+        u_{z,1,j} = 2 u_{z,\text{boundary left}}(z_j) - u_{z,2,j} \quad (\xi=0)
+        \]
+        \[
+        u_{z,N_x+2,j} = 2 u_{z,\text{boundary right}}(z_j) - u_{z,N_x+1,j} \quad (\xi=\xi_{\text{max}})
+        \]
+        \item Давление: \(\frac{\partial p}{\partial \xi} = 0\), т.е. \(p_{1,j} = p_{2,j}\), \(p_{N_x+2,j} = p_{N_x+1,j}\).
+    \end{itemize}
+\end{itemize}
+
+\subsection*{Уравнение импульса для \(u_r\) (\(\xi\)-компонента)}
+Оригинальное уравнение:
+\[
+\rho \frac{\partial u_r}{\partial t} = - m \xi^{(m-1)/m} \frac{\partial p}{\partial \xi} - \nabla J_{\text{conv}}^\xi + \nabla J_{\text{vis}}^\xi + S_{\text{ист}}^\xi
+\]
+Где:
+\[
+\nabla J_{\text{conv}}^\xi = \rho \left[ m \xi^{-2/m} \frac{\partial (\xi^{1/m} u_r u_r)}{\partial \xi} + \frac{\partial (u_z u_r)}{\partial z} \right]
+\]
+\[
+\nabla J_{\text{vis}}^\xi = 2 m^2 \xi^{(m-2)/m} \frac{\partial}{\partial \xi} \left( \eta \xi \frac{\partial u_r}{\partial \xi} \right) + \frac{\partial}{\partial z} \left( \eta \left( \frac{\partial u_r}{\partial z} + u_z m \xi^{(m-1)/m} \frac{\partial u_z}{\partial \xi} \right) \right)
+\]
+\[
+S_{\text{ист}}^\xi = -2 \eta u_r \xi^{-2/m} + \rho g_r
+\]
+
+\subsubsection*{Стадия 1: Промежуточная скорость \(u_r^*\)}
+\[
+\rho \frac{u_r^* - u_r^n}{\Delta t} V_{\text{phys}} = - (J_{\text{conv},e}^\xi - J_{\text{conv},w}^\xi + J_{\text{conv},n}^\xi - J_{\text{conv},s}^\xi) + (J_{\text{vis},e}^\xi - J_{\text{vis},w}^\xi + J_{\text{vis},n}^\xi - J_{\text{vis},s}^\xi) + S_{\text{ист}}^\xi V_{\text{phys}}
+\]
+\begin{itemize}
+    \item \textbf{Конвективные потоки} (\(J_{\text{conv}}\)): Экспоненциальная схема.
+    \begin{itemize}
+        \item Для грани east (\(e\)):
+        \[
+        J_{\text{conv},e}^\xi = \rho m \xi_e^{-2/m} \xi_e^{1/m} (u_r)_e (u_r)_e^{\text{conv}} A_e
+        \]
+        где \((u_r)_e = \frac{u_{r,P} + u_{r,E}}{2}\) — интерполированная скорость для массопереноса (эффективная скорость в \(\xi\)-направлении: \(m \xi_e^{-1/m} (u_r)_e\)),
+        \[
+        Pe_e = \frac{\rho m \xi_e^{-1/m} (u_r)_e \Delta \xi}{\eta} — число Пекле, учитывающее конвекцию относительно вязкости.
+        \]
+        Если \(Pe_e > 0\) (поток из P в E):
+        \[
+        (u_r)_e^{\text{conv}} = u_{r,P} + (u_{r,E} - u_{r,P}) \frac{\exp(Pe_e / 2) - 1}{\exp(Pe_e) - 1}
+        \]
+        Если \(Pe_e < 0\) (поток из E в P):
+        \[
+        (u_r)_e^{\text{conv}} = u_{r,E} + (u_{r,P} - u_{r,E}) \frac{\exp(|Pe_e| / 2) - 1}{\exp(|Pe_e|) - 1}
+        \]
+        Эта аппроксимация обеспечивает плавный переход от центральной разности (при малом Pe) к upwind-схеме (при большом Pe), минимизируя осцилляции и сохраняя точность.
+
+        \item Для грани west (\(w\)):
+        \[
+        J_{\text{conv},w}^\xi = \rho m \xi_w^{-2/m} \xi_w^{1/m} (u_r)_w (u_r)_w^{\text{conv}} A_w
+        \]
+        где \((u_r)_w = \frac{u_{r,W} + u_{r,P}}{2}\),
+        \[
+        Pe_w = \frac{\rho m \xi_w^{-1/m} (u_r)_w \Delta \xi}{\eta}
+        \]
+        Если \(Pe_w > 0\) (поток из W в P):
+        \[
+        (u_r)_w^{\text{conv}} = u_{r,W} + (u_{r,P} - u_{r,W}) \frac{\exp(Pe_w / 2) - 1}{\exp(Pe_w) - 1}
+        \]
+        Если \(Pe_w < 0\) (поток из P в W):
+        \[
+        (u_r)_w^{\text{conv}} = u_{r,P} + (u_{r,W} - u_{r,P}) \frac{\exp(|Pe_w| / 2) - 1}{\exp(|Pe_w|) - 1}
+        \]
+        Направление Pe инвертируется относительно east, чтобы учитывать поток слева.
+
+        \item Для грани north (\(n\)):
+        \[
+        J_{\text{conv},n}^\xi = \rho (u_z)_n (u_r)_n^{\text{conv}} A_n
+        \]
+        где \((u_z)_n = \frac{u_{z,P} + u_{z,N}}{2}\) — интерполированная скорость в z-направлении,
+        \[
+        Pe_n = \frac{\rho (u_z)_n \Delta z}{\eta}
+        \]
+        Если \(Pe_n > 0\) (поток из P в N):
+        \[
+        (u_r)_n^{\text{conv}} = u_{r,P} + (u_{r,N} - u_{r,P}) \frac{\exp(Pe_n / 2) - 1}{\exp(Pe_n) - 1}
+        \]
+        Если \(Pe_n < 0\) (поток из N в P):
+        \[
+        (u_r)_n^{\text{conv}} = u_{r,N} + (u_{r,P} - u_{r,N}) \frac{\exp(|Pe_n| / 2) - 1}{\exp(|Pe_n|) - 1}
+        \]
+        Здесь конвекция определяется u_z, а переносимой величиной является u_r.
+
+        \item Для грани south (\(s\)):
+        \[
+        J_{\text{conv},s}^\xi = \rho (u_z)_s (u_r)_s^{\text{conv}} A_s
+        \]
+        где \((u_z)_s = \frac{u_{z,S} + u_{z,P}}{2}\),
+        \[
+        Pe_s = \frac{\rho (u_z)_s \Delta z}{\eta}
+        \]
+        Если \(Pe_s > 0\) (поток из S в P):
+        \[
+        (u_r)_s^{\text{conv}} = u_{r,S} + (u_{r,P} - u_{r,S}) \frac{\exp(Pe_s / 2) - 1}{\exp(Pe_s) - 1}
+        \]
+        Если \(Pe_s < 0\) (поток из P в S):
+        \[
+        (u_r)_s^{\text{conv}} = u_{r,P} + (u_{r,S} - u_{r,P}) \frac{\exp(|Pe_s| / 2) - 1}{\exp(|Pe_s|) - 1}
+        \]
+        Аналогично north, но направление инвертировано.
+    \end{itemize}
+    \item \textbf{Вязкие потоки} (\(J_{\text{vis}}\)): Центральная разностная аппроксимация.
+    \begin{itemize}
+        \item Для грани east (\(e\)):
+        \[
+        J_{\text{vis},e}^\xi = 2 m^2 \xi_e^{(m-2)/m} \eta_e \xi_e \frac{u_{r,E} - u_{r,P}}{\Delta \xi} A_e
+        \]
+        Здесь \(\eta_e = \frac{\eta_P + \eta_E}{2}\) — интерполированная вязкость, производная \(\frac{\partial u_r}{\partial \xi}\) аппроксимирована центрально, коэффициент 2 m^2 \xi_e^{(m-2)/m} \eta_e \xi_e учитывает форму уравнения в преобразованных координатах.
+
+        \item Для грани west (\(w\)):
+        \[
+        J_{\text{vis},w}^\xi = 2 m^2 \xi_w^{(m-2)/m} \eta_w \xi_w \frac{u_{r,P} - u_{r,W}}{\Delta \xi} A_w
+        \]
+        \(\eta_w = \frac{\eta_W + \eta_P}{2}\), производная \(\frac{\partial u_r}{\partial \xi}\) центральная, знак минус в балансе потоков (вход/выход) учитывается в общей формуле.
+
+        \item Для грани north (\(n\)):
+        \[
+        J_{\text{vis},n}^\xi = \eta_n \left( \frac{u_{r,N} - u_{r,P}}{\Delta z} + (u_z)_n m \xi_P^{(m-1)/m} \frac{u_{z,E} - u_{z,W}}{2 \Delta \xi} \right) A_n
+        \]
+        \(\eta_n = \frac{\eta_P + \eta_N}{2}\), смешанный член: \(\frac{\partial u_r}{\partial z}\) — центральная, \(\frac{\partial u_z}{\partial \xi}\) — центральная по соседям E и W для стабильности.
+
+        \item Для грани south (\(s\)):
+        \[
+        J_{\text{vis},s}^\xi = \eta_s \left( \frac{u_{r,P} - u_{r,S}}{\Delta z} + (u_z)_s m \xi_P^{(m-1)/m} \frac{u_{z,E} - u_{z,W}}{2 \Delta \xi} \right) A_s
+        \]
+        \(\eta_s = \frac{\eta_S + \eta_P}{2}\), аналогично north, но производная \(\frac{\partial u_r}{\partial z}\) с инверсированным знаком для входа/выхода.
+    \end{itemize}
+    \item \textbf{Источник} (\(S_{\text{ист}}^\xi\)):
+    \[
+    S_{\text{ист}}^\xi = \left( -2 \eta_P u_{r,P} \xi_P^{-2/m} + \rho g_r \right) V_{\text{phys}}
+    \]
+    Вычисляется в центре КО P: первый член — дополнительный вязкий эффект от цилиндрической геометрии, второй — гравитация в радиальном направлении; умножен на полный физический объем для интеграла.
+\end{itemize}
+На границах:
+\begin{itemize}
+    \item \(\xi = 0\): \((u_r)_w = 0\), \(J_{\text{conv},w}^\xi = 0\), \(J_{\text{vis},w}^\xi = 0\).
+    \item \(\xi = \xi_{\text{max}}\): \((u_r)_e = 0\), \(J_{\text{conv},e}^\xi = 0\), \(J_{\text{vis},e}^\xi\) использует \(u_{r,N_x+2,j} = -u_{r,N_x,j}\).
+    \item \(z = 0\): \((u_z)_s = 0\), \(J_{\text{conv},s}^\xi = 0\), \(J_{\text{vis},s}^\xi\) использует \(u_{r,i,1} = 2 u_{\text{boundary bottom}}(\xi_i) - u_{r,i,2}\).
+    \item \(z = z_{\text{max}}\): \((u_z)_n = 0\), \(J_{\text{conv},n}^\xi = 0\), \(J_{\text{vis},n}^\xi\) использует \(u_{r,i,N_y+2} = 2 u_{\text{boundary up}}(\xi_i) - u_{r,i,N_y}\).
+\end{itemize}
+
+\subsubsection*{Стадия 2: Коррекция с давлением}
+Уравнение Пуассона:
+\[
+\frac{\partial}{\partial \xi} \left( m \xi^{(m-1)/m} \frac{\partial p}{\partial \xi} \right) + \frac{\partial^2 p}{\partial z^2} = \frac{\rho}{\Delta t} \left[ m \xi^{(m-1)/m} \frac{u_{r,E}^* - u_{r,W}^*}{\Delta \xi} + \frac{u_{z,N}^* - u_{z,S}^*}{\Delta z} \right]
+\]
+Граничные условия для \(p\):
+\begin{itemize}
+    \item \(\xi = 0\), \(\xi = \xi_{\text{max}}\): \(\frac{\partial p}{\partial \xi} = 0\), т.е. \(p_{1,j} = p_{2,j}\), \(p_{N_x+2,j} = p_{N_x+1,j}\).
+    \item \(z = 0\), \(z = z_{\text{max}}\): \(\frac{\partial p}{\partial z} = 0\), т.е. \(p_{i,1} = p_{i,2}\), \(p_{i,N_y+2} = p_{i,N_y}\).
+\end{itemize}
+Коррекция:
+\[
+u_r^{n+1} = u_r^* - \frac{\Delta t}{\rho} m \xi_P^{(m-1)/m} \frac{p_E - p_W}{2 \Delta \xi}
+\]
+
+\subsection*{Уравнение импульса для \(u_z\) (z-компонента)}
+Оригинальное уравнение:
+\[
+\rho \frac{\partial u_z}{\partial t} = - \frac{\partial p}{\partial z} - \nabla J_{\text{conv}}^z + \nabla J_{\text{vis}}^z + S_{\text{ист}}^z
+\]
+Где:
+\[
+\nabla J_{\text{conv}}^z = m \xi^{-2/m} \frac{\partial (\xi^{1/m} u_z u_r)}{\partial \xi} + \frac{\partial (u_z^2)}{\partial z}
+\]
+\[
+\nabla J_{\text{vis}}^z = m \xi^{(m-2)/m} \frac{\partial}{\partial \xi} \left( m \eta \xi \frac{\partial u_z}{\partial \xi} + \eta \xi^{1/m} \frac{\partial u_r}{\partial z} \right) + \frac{\partial}{\partial z} \left( 2 \eta \frac{\partial u_z}{\partial z} \right)
+\]
+\[
+S_{\text{ист}}^z = \rho g_z
+\]
+
+\subsubsection*{Стадия 1: Промежуточная скорость \(u_z^*\)}
+\[
+\rho \frac{u_z^* - u_z^n}{\Delta t} V_{\text{phys}} = - (J_{\text{conv},e}^z - J_{\text{conv},w}^z + J_{\text{conv},n}^z - J_{\text{conv},s}^z) + (J_{\text{vis},e}^z - J_{\text{vis},w}^z + J_{\text{vis},n}^z - J_{\text{vis},s}^z) + S_{\text{ист}}^z V_{\text{phys}}
+\]
+\begin{itemize}
+    \item \textbf{Конвективные потоки} (\(J_{\text{conv}}\)): Экспоненциальная схема.
+    \begin{itemize}
+        \item Для грани east (\(e\)):
+        \[
+        J_{\text{conv},e}^z = m \xi_e^{-2/m} \xi_e^{1/m} (u_z)_e^{\text{conv}} (u_r)_e A_e
+        \]
+        где \((u_r)_e = \frac{u_{r,P} + u_{r,E}}{2}\) — интерполированная скорость для массопереноса (эффективная скорость в \(\xi\)-направлении: \(m \xi_e^{-1/m} (u_r)_e\)),
+        \[
+        Pe_e = \frac{\rho m \xi_e^{-1/m} (u_r)_e \Delta \xi}{\eta} — число Пекле, учитывающее конвекцию относительно вязкости.
+        \]
+        Если \(Pe_e > 0\) (поток из P в E):
+        \[
+        (u_z)_e^{\text{conv}} = u_{z,P} + (u_{z,E} - u_{z,P}) \frac{\exp(Pe_e / 2) - 1}{\exp(Pe_e) - 1}
+        \]
+        Если \(Pe_e < 0\) (поток из E в P):
+        \[
+        (u_z)_e^{\text{conv}} = u_{z,E} + (u_{z,P} - u_{z,E}) \frac{\exp(|Pe_e| / 2) - 1}{\exp(|Pe_e|) - 1}
+        \]
+        Эта аппроксимация обеспечивает плавный переход от центральной разности (при малом Pe) к upwind-схеме (при большом Pe), минимизируя осцилляции и сохраняя точность. Здесь переносимой величиной является u_z.
+
+        \item Для грани west (\(w\)):
+        \[
+        J_{\text{conv},w}^z = m \xi_w^{-2/m} \xi_w^{1/m} (u_z)_w^{\text{conv}} (u_r)_w A_w
+        \]
+        где \((u_r)_w = \frac{u_{r,W} + u_{r,P}}{2}\),
+        \[
+        Pe_w = \frac{\rho m \xi_w^{-1/m} (u_r)_w \Delta \xi}{\eta}
+        \]
+        Если \(Pe_w > 0\) (поток из W в P):
+        \[
+        (u_z)_w^{\text{conv}} = u_{z,W} + (u_{z,P} - u_{z,W}) \frac{\exp(Pe_w / 2) - 1}{\exp(Pe_w) - 1}
+        \]
+        Если \(Pe_w < 0\) (поток из P в W):
+        \[
+        (u_z)_w^{\text{conv}} = u_{z,P} + (u_{z,W} - u_{z,P}) \frac{\exp(|Pe_w| / 2) - 1}{\exp(|Pe_w|) - 1}
+        \]
+        Направление Pe инвертируется относительно east, чтобы учитывать поток слева.
+
+        \item Для грани north (\(n\)):
+        \[
+        J_{\text{conv},n}^z = (u_z)_n (u_z)_n^{\text{conv}} A_n
+        \]
+        где \((u_z)_n = \frac{u_{z,P} + u_{z,N}}{2}\) — интерполированная скорость в z-направлении,
+        \[
+        Pe_n = \frac{\rho (u_z)_n \Delta z}{\eta}
+        \]
+        Если \(Pe_n > 0\) (поток из P в N):
+        \[
+        (u_z)_n^{\text{conv}} = u_{z,P} + (u_{z,N} - u_{z,P}) \frac{\exp(Pe_n / 2) - 1}{\exp(Pe_n) - 1}
+        \]
+        Если \(Pe_n < 0\) (поток из N в P):
+        \[
+        (u_z)_n^{\text{conv}} = u_{z,N} + (u_{z,P} - u_{z,N}) \frac{\exp(|Pe_n| / 2) - 1}{\exp(|Pe_n|) - 1}
+        \]
+        Здесь конвекция определяется u_z, а переносимой величиной также является u_z (самоадвекция).
+
+        \item Для грани south (\(s\)):
+        \[
+        J_{\text{conv},s}^z = (u_z)_s (u_z)_s^{\text{conv}} A_s
+        \]
+        где \((u_z)_s = \frac{u_{z,S} + u_{z,P}}{2}\),
+        \[
+        Pe_s = \frac{\rho (u_z)_s \Delta z}{\eta}
+        \]
+        Если \(Pe_s > 0\) (поток из S в P):
+        \[
+        (u_z)_s^{\text{conv}} = u_{z,S} + (u_{z,P} - u_{z,S}) \frac{\exp(Pe_s / 2) - 1}{\exp(Pe_s) - 1}
+        \]
+        Если \(Pe_s < 0\) (поток из P в S):
+        \[
+        (u_z)_s^{\text{conv}} = u_{z,P} + (u_{z,S} - u_{z,P}) \frac{\exp(|Pe_s| / 2) - 1}{\exp(|Pe_s|) - 1}
+        \]
+        Аналогично north, но направление инвертировано.
+    \end{itemize}
+    \item \textbf{Вязкие потоки} (\(J_{\text{vis}}\)): Центральная разностная аппроксимация.
+    \begin{itemize}
+        \item Для грани east (\(e\)):
+        \[
+        J_{\text{vis},e}^z = m \xi_e^{(m-2)/m} \left( m \eta_e \xi_e \frac{u_{z,E} - u_{z,P}}{\Delta \xi} + \eta_e \xi_e^{1/m} \frac{u_{r,N} - u_{r,S}}{2 \Delta z} \right) A_e
+        \]
+        Здесь \(\eta_e = \frac{\eta_P + \eta_E}{2}\), смешанный член: m \eta_e \xi_e \frac{\partial u_z}{\partial \xi} — центральная по u_z, \eta_e \xi_e^{1/m} \frac{\partial u_r}{\partial z} — центральная по u_r от N к S.
+
+        \item Для грани west (\(w\)):
+        \[
+        J_{\text{vis},w}^z = m \xi_w^{(m-2)/m} \left( m \eta_w \xi_w \frac{u_{z,P} - u_{z,W}}{\Delta \xi} + \eta_w \xi_w^{1/m} \frac{u_{r,N} - u_{r,S}}{2 \Delta z} \right) A_w
+        \]
+        \(\eta_w = \frac{\eta_W + \eta_P}{2}\), аналогично east, но производная \(\frac{\partial u_z}{\partial \xi}\) с инверсированным знаком.
+
+        \item Для грани north (\(n\)):
+        \[
+        J_{\text{vis},n}^z = 2 \eta_n \frac{u_{z,N} - u_{z,P}}{\Delta z} A_n
+        \]
+        \(\eta_n = \frac{\eta_P + \eta_N}{2}\), коэффициент 2 для \(\frac{\partial u_z}{\partial z}\) (из тензора напряжений в Навье-Стокса), центральная аппроксимация.
+
+        \item Для грани south (\(s\)):
+        \[
+        J_{\text{vis},s}^z = 2 \eta_s \frac{u_{z,P} - u_{z,S}}{\Delta z} A_s
+        \]
+        \(\eta_s = \frac{\eta_S + \eta_P}{2}\), аналогично north, но с инверсированным знаком для входа/выхода.
+    \end{itemize}
+    \item \textbf{Источник} (\(S_{\text{ист}}^z\)):
+    \[
+    S_{\text{ист}}^z = \rho g_z V_{\text{phys}}
+    \]
+    Вычисляется в центре КО P: гравитационный источник в осевом направлении, умножен на полный физический объем для интеграла.
+\end{itemize}
+На границах:
+\begin{itemize}
+    \item \(\xi = 0\): \((u_r)_w = 0\), \(J_{\text{conv},w}^z = 0\), \(J_{\text{vis},w}^z\) использует \(u_{z,1,j} = 2 u_{z,\text{boundary left}}(z_j) - u_{z,2,j}\).
+    \item \(\xi = \xi_{\text{max}}\): \((u_r)_e = 0\), \(J_{\text{conv},e}^z = 0\), \(J_{\text{vis},e}^z\) использует \(u_{z,N_x+2,j} = 2 u_{z,\text{boundary right}}(z_j) - u_{z,N_x+1,j}\).
+    \item \(z = 0\): \((u_z)_s = 0\), \(J_{\text{conv},s}^z = 0\), \(J_{\text{vis},s}^z = 0\).
+    \item \(z = z_{\text{max}}\): \((u_z)_n = 0\), \(J_{\text{conv},n}^z = 0\), \(J_{\text{vis},n}^z = 0\).
+\end{itemize}
+
+\subsubsection*{Стадия 2: Коррекция с давлением}
+\[
+u_z^{n+1} = u_z^* - \frac{\Delta t}{\rho} \frac{p_N - p_S}{2 \Delta z}
+\]
+
+\subsection*{Примечания}
+\begin{itemize}
+    \item Уравнение Пуассона решается итеративно (например, методом SOR) для обеспечения \(\text{div} \, \mathbf{u}^{n+1} \approx 0\).
+    \item Для стабильности требуется соблюдение условий CFL (\(u \Delta t / \Delta x < 1\)) и ограничения на вязкость.
+    \item Функции \(u_{\text{boundary bottom}}(\xi)\), \(u_{\text{boundary up}}(\xi)\), \(u_{z,\text{boundary left}}(z)\), \(u_{z,\text{boundary right}}(z)\) должны быть заданы пользователем.
+    \item Предполагается, что \(\eta\) — динамическая вязкость \(\mu\); если \(\eta = \mu / \rho\), умножьте \(Pe\) на \(\rho\).
+\end{itemize}
+
+\end{document}
